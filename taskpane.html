@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Category Sidebar</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  body { font-family: "Segoe UI", sans-serif; font-size: 13px; margin: 0; padding: 8px; color: #242424; background: #fff; }
+  .bar { display: flex; gap: 6px; margin-bottom: 8px; }
+  #filter { flex: 1; padding: 6px 8px; border: 1px solid #8a8a8a; border-radius: 4px; font: inherit; }
+  #refresh { padding: 0 10px; border: 1px solid #8a8a8a; border-radius: 4px; background: #f5f5f5; cursor: pointer; font: inherit; }
+  #msg { color: #8a1f11; margin: 6px 0; min-height: 1em; }
+  #list { display: flex; flex-direction: column; gap: 4px; }
+  .cat { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 6px 8px; border: 2px solid transparent; border-radius: 4px; font: inherit; cursor: pointer; }
+  .cat:hover { filter: brightness(0.95); }
+  .cat:focus-visible { outline: 2px solid #0f6cbd; outline-offset: 1px; }
+  .cat.on { border-color: #242424; font-weight: 600; }
+  .tick { width: 14px; text-align: center; }
+  .empty { color: #616161; padding: 8px 0; }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <input id="filter" type="text" placeholder="Filter categories (Enter applies if one match)" autocomplete="off">
+    <button id="refresh" title="Reload category list">&#8635;</button>
+  </div>
+  <div id="msg" role="status"></div>
+  <div id="list"></div>
+
+<script>
+  // Outlook preset colours -> hex
+  const PRESETS = {
+    Preset0:"#E7A1A2",Preset1:"#F9BA89",Preset2:"#F7DD8F",Preset3:"#FCFA90",Preset4:"#78D168",
+    Preset5:"#9FDCC9",Preset6:"#C6D2B0",Preset7:"#9DB7E8",Preset8:"#B5A1E2",Preset9:"#DAAEC2",
+    Preset10:"#DAD9DC",Preset11:"#6B7A8F",Preset12:"#CFCFCF",Preset13:"#6F6F6F",Preset14:"#4F4F4F",
+    Preset15:"#C11A25",Preset16:"#E2620D",Preset17:"#C79930",Preset18:"#B9B300",Preset19:"#368F2B",
+    Preset20:"#329B7A",Preset21:"#778B45",Preset22:"#2858A5",Preset23:"#5C3FA3",Preset24:"#93446B"
+  };
+  let master = [];   // [{displayName, color}]
+  let current = [];  // category names on the selected item
+
+  const $list = document.getElementById("list");
+  const $filter = document.getElementById("filter");
+  const $msg = document.getElementById("msg");
+
+  Office.onReady(info => {
+    if (info.host !== Office.HostType.Outlook) return;
+    loadMaster();
+    Office.context.mailbox.addHandlerAsync(Office.EventType.ItemChanged, loadItem);
+    $filter.addEventListener("input", render);
+    $filter.addEventListener("keydown", e => {
+      if (e.key !== "Enter") return;
+      const m = visible();
+      if (m.length === 1) { toggle(m[0].displayName); $filter.value = ""; render(); }
+    });
+    document.getElementById("refresh").addEventListener("click", loadMaster);
+  });
+
+  function loadMaster() {
+    Office.context.mailbox.masterCategories.getAsync(r => {
+      if (r.status !== Office.AsyncResultStatus.Succeeded) {
+        $msg.textContent = "Could not load categories: " + (r.error && r.error.message);
+        return;
+      }
+      master = r.value || [];
+      loadItem();
+    });
+  }
+
+  function loadItem() {
+    const item = Office.context.mailbox.item;
+    if (!item || !item.categories) { current = []; render(); return; }
+    item.categories.getAsync(r => {
+      current = r.status === Office.AsyncResultStatus.Succeeded ? (r.value || []).map(c => c.displayName) : [];
+      render();
+    });
+  }
+
+  function toggle(name) {
+    const item = Office.context.mailbox.item;
+    if (!item || !item.categories) { $msg.textContent = "Select an email first."; return; }
+    const had = current.includes(name);
+    const done = r => {
+      if (r.status !== Office.AsyncResultStatus.Succeeded) {
+        $msg.textContent = "Could not update: " + (r.error && r.error.message);
+        loadItem();
+      } else { $msg.textContent = ""; }
+    };
+    // update the UI immediately, then confirm with Outlook
+    current = had ? current.filter(n => n !== name) : current.concat(name);
+    render();
+    if (had) item.categories.removeAsync([name], done);
+    else item.categories.addAsync([name], done);
+  }
+
+  function visible() {
+    const q = $filter.value.trim().toLowerCase();
+    return master.filter(c => c.displayName.toLowerCase().includes(q));
+  }
+
+  function textColor(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    const lum = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255));
+    return lum > 150 ? "#242424" : "#ffffff";
+  }
+
+  function render() {
+    $list.innerHTML = "";
+    const items = visible();
+    if (!items.length) {
+      const d = document.createElement("div");
+      d.className = "empty";
+      d.textContent = master.length ? "No categories match." : "No categories found.";
+      $list.appendChild(d);
+      return;
+    }
+    items.forEach(c => {
+      const bg = PRESETS[c.color] || "#E6E6E6";
+      const b = document.createElement("button");
+      b.className = "cat" + (current.includes(c.displayName) ? " on" : "");
+      b.style.background = bg;
+      b.style.color = textColor(bg);
+      const t = document.createElement("span");
+      t.className = "tick";
+      t.textContent = current.includes(c.displayName) ? "\u2713" : "";
+      const n = document.createElement("span");
+      n.textContent = c.displayName;
+      b.append(t, n);
+      b.addEventListener("click", () => toggle(c.displayName));
+      $list.appendChild(b);
+    });
+  }
+</script>
+</body>
+</html>
